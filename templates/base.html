@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#6c5ce7">
+  <title>{% block title %}My Plan{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+  <link rel="icon" href="{{ url_for('static', filename='icon.svg') }}" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon.svg') }}">
+</head>
+<body>
+  <div class="site-title">
+    <a href="{{ url_for('months.index') }}">Habit Tracker</a>
+  </div>
+  <nav class="topnav">
+    <a href="{{ url_for('months.index') }}">This Month</a>
+    <a href="{{ url_for('months.list_months') }}">History</a>
+    <a href="{{ url_for('months.new_month') }}">New Month</a>
+  </nav>
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      <ul class="flashes">
+        {% for msg in messages %}<li>{{ msg }}</li>{% endfor %}
+      </ul>
+    {% endif %}
+  {% endwith %}
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}");
+      });
+    }
+  </script>
+</body>
+</html>

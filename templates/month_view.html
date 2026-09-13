@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}{{ month.year }}-{{ '%02d'|format(month.month) }}{% endblock %}
+{% block content %}
+<table class="month-year-table">
+  <thead>
+    <tr><th>Month</th><th>Year</th></tr>
+  </thead>
+  <tbody>
+    <tr><td class="month-cell">{{ month_name }}</td><td class="year-cell">{{ month.year }}</td></tr>
+  </tbody>
+</table>
+<p class="status-line">Status: {{ month.status }}</p>
+
+<ul>
+  {% for name in habit_names %}
+  <li>{{ name }}</li>
+  {% else %}
+  <li>No habits added yet.</li>
+  {% endfor %}
+</ul>
+
+{% if month.status == 'draft' %}
+  <p><a href="{{ url_for('months.new_month') }}">Edit habits</a></p>
+  <form method="post" action="{{ url_for('months.lock_month', month_id=month.id) }}">
+    <button type="submit" {{ 'disabled' if not habit_names else '' }}>Start This Month</button>
+  </form>
+{% else %}
+  <p>Locked on {{ month.locked_at }}.</p>
+  <p>
+    <a href="{{ url_for('months.grid', month_id=month.id) }}">Check off habits</a>
+    &nbsp;|&nbsp;
+    <a href="{{ url_for('months.report', month_id=month.id) }}">View report</a>
+  </p>
+{% endif %}
+{% endblock %}

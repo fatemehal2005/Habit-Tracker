@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Report {{ month.year }}-{{ '%02d'|format(month.month) }}{% endblock %}
+{% block content %}
+<table class="month-year-table">
+  <thead>
+    <tr><th>Month</th><th>Year</th></tr>
+  </thead>
+  <tbody>
+    <tr><td class="month-cell">{{ month_name }}</td><td class="year-cell">{{ month.year }}</td></tr>
+  </tbody>
+</table>
+
+<h2>Overall: {{ overall_pct }}% ({{ done }}/{{ total }})</h2>
+
+<h3>Per-task breakdown</h3>
+<table>
+  <thead>
+    <tr><th>Task</th><th>Completed</th><th>Scheduled</th><th>%</th><th>Best streak</th><th>Current streak</th></tr>
+  </thead>
+  <tbody>
+    {% for t in per_task %}
+    <tr>
+      <td>{{ t.name }}</td>
+      <td>{{ t.completed }}</td>
+      <td>{{ t.scheduled }}</td>
+      <td>{{ t.pct }}%</td>
+      <td>{{ t.best_streak }}</td>
+      <td>{{ t.current_streak }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h3>Calendar</h3>
+<table class="heatmap">
+  <thead>
+    <tr><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th><th>Sun</th></tr>
+  </thead>
+  <tbody>
+    {% for week in weeks %}
+    <tr>
+      {% for cell in week %}
+        {% if cell is none %}
+          <td class="empty"></td>
+        {% else %}
+          {% if cell.ratio is none %}
+            {% set level = 'none' %}
+          {% elif cell.ratio == 0 %}
+            {% set level = 'l0' %}
+          {% elif cell.ratio < 0.34 %}
+            {% set level = 'l1' %}
+          {% elif cell.ratio < 0.67 %}
+            {% set level = 'l2' %}
+          {% elif cell.ratio < 1 %}
+            {% set level = 'l3' %}
+          {% else %}
+            {% set level = 'l4' %}
+          {% endif %}
+          <td class="day {{ level }}" title="{{ cell.date }}">{{ cell.day }}</td>
+        {% endif %}
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
