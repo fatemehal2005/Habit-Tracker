@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Lessons — Study Tracker{% endblock %}
+{% block content %}
+<h2>Add a lesson</h2>
+<form method="post" action="{{ url_for('study.lessons') }}" class="row-form">
+  <label class="field grow">Lesson name
+    <input type="text" name="name" placeholder="e.g. Mathematics" required>
+  </label>
+  <label class="field">Daily target
+    <span class="target-field"><input type="number" name="target" min="0.25" step="0.25" value="1" required> h/day</span>
+  </label>
+  <button class="btn">Add</button>
+</form>
+
+<h2>Lessons</h2>
+{% for l in lessons %}
+<div class="row-card{% if l.archived %} archived{% endif %}">
+  <form method="post" action="{{ url_for('study.update_lesson', lesson_id=l.id) }}" class="row-form">
+    <input type="text" name="name" value="{{ l.name }}" aria-label="Lesson name" required>
+    <label class="target-field"><input type="number" name="target" min="0.25" step="0.25" value="{{ l.daily_target_hours }}" aria-label="Daily target in hours" required> h/day</label>
+    <button class="btn">Save</button>
+  </form>
+  <form method="post" action="{{ url_for('study.archive_lesson', lesson_id=l.id) }}">
+    <input type="hidden" name="archived" value="{{ 0 if l.archived else 1 }}">
+    <button class="btn btn-quiet">{{ 'Unarchive' if l.archived else 'Archive' }}</button>
+  </form>
+</div>
+{% else %}
+<p class="empty-note">No lessons yet.</p>
+{% endfor %}
+{% endblock %}

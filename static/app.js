@@ -1,106 +1,97 @@
-const monthId = document.currentScript.getAttribute('data-month-id');
-const todayStr = document.currentScript.getAttribute('data-today');
+// --- Today: running timer ---
+// Elapsed time comes from the server at page load; the browser only adds the time since then,
+// so a device with a different clock or time zone still shows the right value.
+const loadedAt = Date.now();
 
-function pct(done, total) {
-  return total ? Math.round((100 * done) / total) : 0;
+function pad(n) {
+  return String(n).padStart(2, '0');
 }
 
-function updateHabitProgress(box) {
-  const row = box.closest('[data-habit-row]');
-  if (!row) return;
-  const boxes = row.querySelectorAll('.toggle-box');
-  const done = [...boxes].filter((b) => b.checked).length;
-  const p = pct(done, boxes.length);
-  const fill = row.querySelector('[data-habit-fill]');
-  const label = row.querySelector('[data-habit-pct]');
-  if (fill) fill.style.setProperty('--target', `${p}%`);
-  if (label) label.textContent = `${p}%`;
+function hm(seconds) {
+  return `${Math.floor(seconds / 3600)}h ${pad(Math.floor((seconds % 3600) / 60))}m`;
 }
 
-function updateWeekProgress(box) {
-  const week = box.getAttribute('data-week');
-  const boxes = document.querySelectorAll(`.toggle-box[data-week="${week}"]`);
-  const done = [...boxes].filter((b) => b.checked).length;
-  const total = boxes.length;
-  const p = pct(done, total);
-  const fill = document.querySelector(`[data-week-fill="${week}"]`);
-  const label = document.querySelector(`[data-week-pct="${week}"]`);
-  if (fill) fill.style.setProperty('--target', `${p}%`);
-  if (label) label.textContent = `${p}% (${done}/${total})`;
+function hms(seconds) {
+  return `${Math.floor(seconds / 3600)}:${pad(Math.floor((seconds % 3600) / 60))}:${pad(seconds % 60)}`;
 }
 
-function updateOverallProgress() {
-  const boxes = document.querySelectorAll('.toggle-box');
-  const done = [...boxes].filter((b) => b.checked).length;
-  const total = boxes.length;
-  const p = pct(done, total);
-  const ring = document.getElementById('overall-ring');
-  const value = document.getElementById('overall-ring-value');
-  const doneEl = document.getElementById('overall-done');
-  if (ring) ring.style.setProperty('--pct', p);
-  if (value) value.textContent = `${p}%`;
-  if (doneEl) doneEl.textContent = done;
+const banner = document.querySelector('[data-elapsed]');
+if (banner) {
+  const card = document.querySelector('.lesson-card[data-ticking]');
+  const tick = () => {
+    const since = Math.floor((Date.now() - loadedAt) / 1000);
+    banner.textContent = hms(Number(banner.dataset.elapsed) + since);
+    if (card) {
+      const seconds = Number(card.dataset.seconds) + since;
+      card.querySelector('[data-studied]').textContent = hm(seconds);
+      card.querySelector('[data-fill]').style.width =
+        `${Math.min(100, (100 * seconds) / Number(card.dataset.target))}%`;
+      card.classList.toggle('is-done', seconds >= Number(card.dataset.target));
+    }
+  };
+  tick();
+  setInterval(tick, 1000);
 }
 
-function updateTodayProgress(box) {
-  const ring = document.getElementById('today-ring');
-  if (!ring) return;
-  const date = box.getAttribute('data-date');
-  if (date !== todayStr) return;
-  const sameDayBoxes = document.querySelectorAll(`.toggle-box[data-date="${date}"]`);
-  const done = [...sameDayBoxes].filter((b) => b.checked).length;
-  const p = pct(done, sameDayBoxes.length);
-  const value = document.getElementById('today-ring-value');
-  const doneEl = document.getElementById('today-done');
-  ring.style.setProperty('--pct', p);
-  if (value) value.textContent = `${p}%`;
-  if (doneEl) doneEl.textContent = done;
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-  document.querySelectorAll('.toggle-box').forEach((box) => {
-    box.addEventListener('change', async () => {
-      const entryId = box.getAttribute('data-entry-id');
-      const prevChecked = !box.checked;
-      box.disabled = true;
-      try {
-        const res = await fetch(`/months/${monthId}/grid/entries/${entryId}/toggle`, {
-          method: 'POST',
-        });
-        if (!res.ok) {
-          box.checked = prevChecked;
-        }
-      } catch (e) {
-        box.checked = prevChecked;
-      } finally {
-        box.disabled = false;
-        updateHabitProgress(box);
-        updateWeekProgress(box);
-        updateOverallProgress();
-        updateTodayProgress(box);
-      }
-    });
+// Pick up a timer started or stopped on another device when coming back to the page.
+if (document.getElementById('today')) {
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) location.reload();
   });
+}
 
-  document.querySelectorAll('.note-input').forEach((input) => {
-    let lastSaved = input.value;
-    input.addEventListener('blur', async () => {
-      if (input.value === lastSaved) return;
-      const date = input.getAttribute('data-date');
-      try {
-        const res = await fetch(`/months/${monthId}/notes/${date}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ note: input.value }),
-        });
-        if (res.ok) {
-          lastSaved = input.value;
-          input.classList.add('saved-flash');
-          setTimeout(() => input.classList.remove('saved-flash'), 600);
-        }
-      } catch (e) {
-        // leave value as-is; user can retry
-      }
-    });
+// --- Today: monthly check table ---
+document.querySelectorAll('.check-box').forEach((box) => {
+  box.addEventListener('change', async () => {
+    let ok = false;
+    try {
+      const res = await fetch(`/checks/${box.dataset.lessonId}/${box.dataset.date}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ done: box.checked }),
+      });
+      ok = res.ok;
+    } catch (e) {
+      // offline or server unreachable
+    }
+    if (!ok) box.checked = !box.checked;
+    const row = box.closest('tr');
+    const boxes = [...row.querySelectorAll('.check-box')];
+    const done = boxes.filter((b) => b.checked).length;
+    row.querySelector('[data-result-days]').textContent = done;
+    row.querySelector('[data-result-pct]').textContent = Math.round((100 * done) / boxes.length);
   });
 });
+
+// --- Report / Compare: grouped bar chart ---
+const CHART_COLORS = {
+  report: ['#2a78d6', '#9a998f'],
+  compare: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300'],
+};
+
+const chartData = document.getElementById('chart-data');
+if (chartData) {
+  const { kind, labels, datasets } = JSON.parse(chartData.textContent);
+  const css = getComputedStyle(document.documentElement);
+  Chart.defaults.color = css.getPropertyValue('--muted').trim();
+  datasets.forEach((ds, i) => {
+    ds.backgroundColor = CHART_COLORS[kind][i];
+    ds.borderRadius = 4;
+  });
+  new Chart(document.getElementById('chart'), {
+    type: 'bar',
+    data: { labels, datasets },
+    options: {
+      maintainAspectRatio: false,
+      scales: {
+        x: { grid: { display: false } },
+        y: { beginAtZero: true, title: { display: true, text: 'Hours' }, grid: { color: css.getPropertyValue('--border').trim() } },
+      },
+      plugins: {
+        tooltip: {
+          callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)} h` },
+        },
+      },
+    },
+  });
+}

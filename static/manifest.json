@@ -1,6 +1,6 @@
 {
-  "name": "Habit Tracker",
-  "short_name": "Habits",
+  "name": "Study Tracker",
+  "short_name": "Study",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#fdfcff",

@@ -1,5 +1,10 @@
-const CACHE_NAME = 'habit-tracker-static-v1';
-const STATIC_ASSETS = ['/static/style.css', '/static/app.js', '/static/icon.svg'];
+const CACHE_NAME = 'study-tracker-static-v11';
+const STATIC_ASSETS = [
+  '/static/style.css',
+  '/static/app.js',
+  '/static/icon.svg',
+  '/static/vendor/chart.umd.min.js',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -18,7 +23,7 @@ self.addEventListener('activate', (event) => {
 });
 
 // Static assets: cache-first. Everything else (app pages/data) always hits the
-// local server since habit data lives in the server-side database, not the browser.
+// server since study data lives in the server-side database, not the browser.
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (url.pathname.startsWith('/static/')) {

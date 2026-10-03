@@ -1,512 +1,260 @@
 import calendar
-import csv
-import io
-from datetime import date
+import sqlite3
+from datetime import datetime
 
 from db import get_db
 
-WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+TIME_FMT = "%Y-%m-%dT%H:%M:%S"
+
+# Length of a session in seconds; a running session (end_at NULL) counts up to now.
+SECONDS_SQL = (
+    "strftime('%s', COALESCE(s.end_at, datetime('now', 'localtime')))"
+    " - strftime('%s', s.start_at)"
+)
 
 
-def list_months():
+def _now():
+    return datetime.now().strftime(TIME_FMT)
+
+
+# --- Lessons ---
+
+def list_lessons(include_archived=False):
     conn = get_db()
-    rows = conn.execute(
-        "SELECT * FROM months ORDER BY year DESC, month DESC"
-    ).fetchall()
+    sql = "SELECT * FROM lessons"
+    if not include_archived:
+        sql += " WHERE archived = 0"
+    rows = conn.execute(sql + " ORDER BY archived, name").fetchall()
     conn.close()
     return rows
 
 
-def get_month(month_id):
+def add_lesson(name, daily_target_hours):
+    """Returns False if a lesson with that name already exists."""
     conn = get_db()
-    row = conn.execute("SELECT * FROM months WHERE id = ?", (month_id,)).fetchone()
-    conn.close()
-    return row
-
-
-def get_month_by_year_month(year, month):
-    conn = get_db()
-    row = conn.execute(
-        "SELECT * FROM months WHERE year = ? AND month = ?", (year, month)
-    ).fetchone()
-    conn.close()
-    return row
-
-
-def create_month(year, month):
-    conn = get_db()
-    cur = conn.execute(
-        "INSERT INTO months (year, month, status) VALUES (?, ?, 'draft')",
-        (year, month),
-    )
-    conn.commit()
-    month_id = cur.lastrowid
-    conn.close()
-    return month_id
-
-
-def get_or_create_task(conn, name):
-    row = conn.execute("SELECT id FROM tasks WHERE name = ?", (name,)).fetchone()
-    if row:
-        return row["id"]
-    cur = conn.execute("INSERT INTO tasks (name) VALUES (?)", (name,))
-    return cur.lastrowid
-
-
-ALL_WEEKDAYS = [0, 1, 2, 3, 4, 5, 6]
-
-
-def set_month_habits(month_id, habit_names):
-    """habit_names: list of habit name strings. Each applies every day of the week."""
-    conn = get_db()
-    conn.execute("DELETE FROM month_tasks WHERE month_id = ?", (month_id,))
-    for name in habit_names:
-        name = name.strip()
-        if not name:
-            continue
-        task_id = get_or_create_task(conn, name)
-        for wd in ALL_WEEKDAYS:
-            conn.execute(
-                "INSERT OR IGNORE INTO month_tasks (month_id, task_id, weekday) VALUES (?, ?, ?)",
-                (month_id, task_id, wd),
-            )
-    conn.commit()
-    conn.close()
-
-
-def get_month_habit_names(month_id):
-    conn = get_db()
-    rows = conn.execute(
-        """SELECT DISTINCT t.name
-           FROM month_tasks mt JOIN tasks t ON t.id = mt.task_id
-           WHERE mt.month_id = ?
-           ORDER BY t.name""",
-        (month_id,),
-    ).fetchall()
-    conn.close()
-    return [r["name"] for r in rows]
-
-
-def get_previous_month_habits(year, month):
-    """Habit names from the most recent month before (year, month) that has any habits set."""
-    conn = get_db()
-    row = conn.execute(
-        """SELECT id FROM months
-           WHERE (year < ?) OR (year = ? AND month < ?)
-           ORDER BY year DESC, month DESC
-           LIMIT 1""",
-        (year, year, month),
-    ).fetchone()
-    conn.close()
-    if row is None:
-        return []
-    return get_month_habit_names(row["id"])
-
-
-def delete_month(month_id):
-    conn = get_db()
-    conn.execute("DELETE FROM daily_entries WHERE month_id = ?", (month_id,))
-    conn.execute("DELETE FROM month_tasks WHERE month_id = ?", (month_id,))
-    conn.execute("DELETE FROM day_notes WHERE month_id = ?", (month_id,))
-    conn.execute("DELETE FROM months WHERE id = ?", (month_id,))
-    conn.commit()
-    conn.close()
-
-
-def get_month_schedule(month_id):
-    """Returns list of rows: task_id, task name, weekday."""
-    conn = get_db()
-    rows = conn.execute(
-        """SELECT mt.task_id, t.name, mt.weekday
-           FROM month_tasks mt JOIN tasks t ON t.id = mt.task_id
-           WHERE mt.month_id = ?
-           ORDER BY t.name, mt.weekday""",
-        (month_id,),
-    ).fetchall()
-    conn.close()
-    return rows
-
-
-def lock_month(month_id):
-    conn = get_db()
-    month = conn.execute("SELECT * FROM months WHERE id = ?", (month_id,)).fetchone()
-    if month is None or month["status"] != "draft":
-        conn.close()
-        return False
-
-    schedule = conn.execute(
-        "SELECT task_id, weekday FROM month_tasks WHERE month_id = ?", (month_id,)
-    ).fetchall()
-
-    by_weekday = {}
-    for row in schedule:
-        by_weekday.setdefault(row["weekday"], []).append(row["task_id"])
-
-    _, days_in_month = calendar.monthrange(month["year"], month["month"])
-    for day in range(1, days_in_month + 1):
-        d = date(month["year"], month["month"], day)
-        weekday = d.weekday()
-        for task_id in by_weekday.get(weekday, []):
-            conn.execute(
-                "INSERT OR IGNORE INTO daily_entries (month_id, task_id, date, done) VALUES (?, ?, ?, 0)",
-                (month_id, task_id, d.isoformat()),
-            )
-
-    conn.execute(
-        "UPDATE months SET status = 'locked', locked_at = ? WHERE id = ?",
-        (date.today().isoformat(), month_id),
-    )
-    conn.commit()
-    conn.close()
-    return True
-
-
-def get_daily_entries(date_str):
-    conn = get_db()
-    rows = conn.execute(
-        """SELECT de.id, de.task_id, t.name, de.done
-           FROM daily_entries de JOIN tasks t ON t.id = de.task_id
-           WHERE de.date = ?
-           ORDER BY t.name""",
-        (date_str,),
-    ).fetchall()
-    conn.close()
-    return rows
-
-
-def get_month_grid(month_id):
-    """Returns habits (rows) x calendar weeks (Mon-Sun columns) for checking off the whole month."""
-    conn = get_db()
-    month = conn.execute("SELECT * FROM months WHERE id = ?", (month_id,)).fetchone()
-
-    habits = conn.execute(
-        """SELECT DISTINCT t.id AS task_id, t.name
-           FROM daily_entries de JOIN tasks t ON t.id = de.task_id
-           WHERE de.month_id = ?
-           ORDER BY t.name""",
-        (month_id,),
-    ).fetchall()
-
-    entries = conn.execute(
-        "SELECT id, task_id, date, done FROM daily_entries WHERE month_id = ?",
-        (month_id,),
-    ).fetchall()
-    conn.close()
-
-    entry_map = {(e["task_id"], e["date"]): e for e in entries}
-
-    _, days_in_month = calendar.monthrange(month["year"], month["month"])
-    weeks = _build_date_weeks(month["year"], month["month"], days_in_month)
-
-    by_date = {}
-    for e in entries:
-        by_date.setdefault(e["date"], []).append(e["done"])
-
-    weekly_progress = []
-    for i, week in enumerate(weeks, start=1):
-        total = 0
-        done = 0
-        for cell in week:
-            if cell is None:
-                continue
-            for d in by_date.get(cell["date"], []):
-                total += 1
-                done += d
-        pct = round(100 * done / total) if total else 0
-        weekly_progress.append({"label": f"Week {i}", "done": done, "total": total, "pct": pct})
-
-    today_str = date.today().isoformat()
-    today_vals = by_date.get(today_str)
-    today_progress = None
-    if today_vals is not None:
-        total = len(today_vals)
-        done = sum(today_vals)
-        pct = round(100 * done / total) if total else 0
-        today_progress = {"date": today_str, "done": done, "total": total, "pct": pct}
-
-    by_task = {}
-    for e in entries:
-        by_task.setdefault(e["task_id"], []).append(e["done"])
-
-    entries_by_task = {}
-    for e in entries:
-        entries_by_task.setdefault(e["task_id"], []).append(e)
-
-    habit_progress = {}
-    for h in habits:
-        vals = by_task.get(h["task_id"], [])
-        total = len(vals)
-        done = sum(vals)
-        pct = round(100 * done / total) if total else 0
-
-        dated = sorted(entries_by_task.get(h["task_id"], []), key=lambda e: e["date"])
-        current_streak = 0
-        for e in reversed(dated):
-            if e["done"]:
-                current_streak += 1
-            else:
-                break
-
-        habit_progress[h["task_id"]] = {
-            "done": done,
-            "total": total,
-            "pct": pct,
-            "current_streak": current_streak,
-        }
-
-    overall_total = len(entries)
-    overall_done = sum(e["done"] for e in entries)
-    overall_pct = round(100 * overall_done / overall_total) if overall_total else 0
-    overall_progress = {"done": overall_done, "total": overall_total, "pct": overall_pct}
-
-    day_notes = get_day_notes(month_id)
-
-    return {
-        "month": month,
-        "habits": habits,
-        "weeks": weeks,
-        "entry_map": entry_map,
-        "weekly_progress": weekly_progress,
-        "today_progress": today_progress,
-        "habit_progress": habit_progress,
-        "overall_progress": overall_progress,
-        "day_notes": day_notes,
-    }
-
-
-def get_day_notes(month_id):
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT date, note FROM day_notes WHERE month_id = ?", (month_id,)
-    ).fetchall()
-    conn.close()
-    return {r["date"]: r["note"] for r in rows}
-
-
-def set_day_note(month_id, date_str, note):
-    conn = get_db()
-    note = note.strip()
-    if note:
+    try:
         conn.execute(
-            """INSERT INTO day_notes (month_id, date, note) VALUES (?, ?, ?)
-               ON CONFLICT(month_id, date) DO UPDATE SET note = excluded.note""",
-            (month_id, date_str, note),
+            "INSERT INTO lessons (name, daily_target_hours) VALUES (?, ?)",
+            (name, daily_target_hours),
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+
+def update_lesson(lesson_id, name, daily_target_hours):
+    """Returns False if another lesson already has that name."""
+    conn = get_db()
+    try:
+        conn.execute(
+            "UPDATE lessons SET name = ?, daily_target_hours = ? WHERE id = ?",
+            (name, daily_target_hours, lesson_id),
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+
+def set_archived(lesson_id, archived):
+    conn = get_db()
+    conn.execute("UPDATE lessons SET archived = ? WHERE id = ?", (int(archived), lesson_id))
+    conn.commit()
+    conn.close()
+
+
+# --- Timer ---
+
+def get_running_session():
+    conn = get_db()
+    row = conn.execute(
+        f"""SELECT s.id, s.lesson_id, l.name, s.start_at, {SECONDS_SQL} AS seconds
+            FROM sessions s JOIN lessons l ON l.id = s.lesson_id
+            WHERE s.end_at IS NULL"""
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def start_session(lesson_id):
+    """Starts a timer for the lesson, stopping any timer that is already running."""
+    now = _now()
+    conn = get_db()
+    conn.execute("UPDATE sessions SET end_at = ? WHERE end_at IS NULL", (now,))
+    conn.execute("INSERT INTO sessions (lesson_id, start_at) VALUES (?, ?)", (lesson_id, now))
+    conn.commit()
+    conn.close()
+
+
+def stop_running_session():
+    conn = get_db()
+    conn.execute("UPDATE sessions SET end_at = ? WHERE end_at IS NULL", (_now(),))
+    conn.commit()
+    conn.close()
+
+
+# --- Sessions ---
+
+def list_recent_sessions(limit=50):
+    conn = get_db()
+    rows = conn.execute(
+        f"""SELECT s.id, s.lesson_id, l.name, s.start_at, s.end_at, {SECONDS_SQL} AS seconds
+            FROM sessions s JOIN lessons l ON l.id = s.lesson_id
+            ORDER BY s.start_at DESC LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def add_session(lesson_id, start_at, end_at):
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO sessions (lesson_id, start_at, end_at) VALUES (?, ?, ?)",
+        (lesson_id, start_at, end_at),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_session(session_id, lesson_id, start_at, end_at):
+    conn = get_db()
+    conn.execute(
+        "UPDATE sessions SET lesson_id = ?, start_at = ?, end_at = ? WHERE id = ?",
+        (lesson_id, start_at, end_at, session_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_session(session_id):
+    conn = get_db()
+    conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+    conn.commit()
+    conn.close()
+
+
+# --- Reports ---
+
+def get_today(day):
+    """Active lessons with the seconds studied in sessions that started on `day`."""
+    conn = get_db()
+    rows = conn.execute(
+        f"""SELECT l.id, l.name, l.daily_target_hours,
+                   COALESCE(SUM({SECONDS_SQL}), 0) AS seconds,
+                   COALESCE(SUM(s.id IS NOT NULL AND s.end_at IS NULL), 0) AS ticking
+            FROM lessons l
+            LEFT JOIN sessions s ON s.lesson_id = l.id AND s.start_at LIKE ?
+            WHERE l.archived = 0
+            GROUP BY l.id
+            ORDER BY l.name""",
+        (f"{day.isoformat()}%",),
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def _month_hours(conn, year, month):
+    """{lesson_id: hours} for sessions that started in the given month."""
+    rows = conn.execute(
+        f"""SELECT s.lesson_id, SUM({SECONDS_SQL}) / 3600.0 AS hours
+            FROM sessions s WHERE s.start_at LIKE ? GROUP BY s.lesson_id""",
+        (f"{year}-{month:02d}-%",),
+    ).fetchall()
+    return {r["lesson_id"]: r["hours"] for r in rows}
+
+
+def get_month_hours(year, month):
+    """Actual vs planned hours per lesson. Archived lessons appear only if studied that month."""
+    conn = get_db()
+    hours = _month_hours(conn, year, month)
+    all_lessons = conn.execute("SELECT * FROM lessons ORDER BY name").fetchall()
+    conn.close()
+
+    _, days_in_month = calendar.monthrange(year, month)
+    lessons = []
+    for l in all_lessons:
+        actual = hours.get(l["id"], 0)
+        if l["archived"] and not actual:
+            continue
+        planned = l["daily_target_hours"] * days_in_month
+        lessons.append(
+            {
+                "name": l["name"],
+                "actual": actual,
+                "planned": planned,
+                "pct": round(100 * actual / planned) if planned else 0,
+            }
+        )
+    return {"lessons": lessons, "total": sum(l["actual"] for l in lessons)}
+
+
+def get_comparison(n, year, month):
+    """Hours per lesson for the last n months ending at (year, month), oldest first,
+    with the percent change versus the month before (None when that month had 0 hours)."""
+    months = []
+    y, m = year, month
+    for _ in range(n + 1):  # one extra so the oldest shown month has a previous month
+        months.append((y, m))
+        y, m = (y, m - 1) if m > 1 else (y - 1, 12)
+    months.reverse()
+
+    conn = get_db()
+    by_month = [_month_hours(conn, y, m) for y, m in months]
+    all_lessons = conn.execute("SELECT * FROM lessons ORDER BY name").fetchall()
+    conn.close()
+
+    lessons = []
+    for l in all_lessons:
+        hours = [h.get(l["id"], 0) for h in by_month]
+        if l["archived"] and not any(hours[1:]):
+            continue
+        changes = [
+            round(100 * (cur - prev) / prev) if prev else None
+            for prev, cur in zip(hours, hours[1:])
+        ]
+        lessons.append({"name": l["name"], "hours": hours[1:], "changes": changes})
+
+    labels = [f"{calendar.month_abbr[m]} {y}" for y, m in months[1:]]
+    return {"months": labels, "lessons": lessons}
+
+
+# --- Monthly check table ---
+
+def get_month_weeks(year, month):
+    """The month's days grouped into calendar weeks (Mon-Sun): a list of lists of dates."""
+    return [
+        [d for d in week if d.month == month]
+        for week in calendar.Calendar().monthdatescalendar(year, month)
+    ]
+
+
+def get_month_checks(year, month):
+    """Set of (lesson_id, 'YYYY-MM-DD') that are checked in the given month."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT lesson_id, date FROM lesson_checks WHERE date LIKE ?",
+        (f"{year}-{month:02d}-%",),
+    ).fetchall()
+    conn.close()
+    return {(r["lesson_id"], r["date"]) for r in rows}
+
+
+def set_check(lesson_id, date_str, done):
+    conn = get_db()
+    if done:
+        conn.execute(
+            "INSERT OR IGNORE INTO lesson_checks (lesson_id, date) VALUES (?, ?)",
+            (lesson_id, date_str),
         )
     else:
         conn.execute(
-            "DELETE FROM day_notes WHERE month_id = ? AND date = ?", (month_id, date_str)
+            "DELETE FROM lesson_checks WHERE lesson_id = ? AND date = ?", (lesson_id, date_str)
         )
     conn.commit()
     conn.close()
-
-
-def mark_all_done(month_id, date_str):
-    conn = get_db()
-    conn.execute(
-        "UPDATE daily_entries SET done = 1 WHERE month_id = ? AND date = ?",
-        (month_id, date_str),
-    )
-    conn.commit()
-    conn.close()
-
-
-def get_months_trend():
-    """Overall completion % for every locked month, oldest first, for a history trend chart."""
-    conn = get_db()
-    months = conn.execute(
-        "SELECT id, year, month FROM months WHERE status = 'locked' ORDER BY year, month"
-    ).fetchall()
-    trend = []
-    for m in months:
-        row = conn.execute(
-            "SELECT COUNT(*) AS total, SUM(done) AS done FROM daily_entries WHERE month_id = ?",
-            (m["id"],),
-        ).fetchone()
-        total = row["total"] or 0
-        done = row["done"] or 0
-        pct = round(100 * done / total) if total else 0
-        trend.append(
-            {
-                "label": f"{calendar.month_abbr[m['month']]} {m['year']}",
-                "pct": pct,
-            }
-        )
-    conn.close()
-    return trend
-
-
-def export_month_csv(month_id):
-    conn = get_db()
-    month = conn.execute("SELECT * FROM months WHERE id = ?", (month_id,)).fetchone()
-    habits = conn.execute(
-        """SELECT DISTINCT t.id AS task_id, t.name
-           FROM daily_entries de JOIN tasks t ON t.id = de.task_id
-           WHERE de.month_id = ?
-           ORDER BY t.name""",
-        (month_id,),
-    ).fetchall()
-    entries = conn.execute(
-        "SELECT task_id, date, done FROM daily_entries WHERE month_id = ?", (month_id,)
-    ).fetchall()
-    notes = conn.execute(
-        "SELECT date, note FROM day_notes WHERE month_id = ?", (month_id,)
-    ).fetchall()
-    conn.close()
-
-    note_map = {r["date"]: r["note"] for r in notes}
-    value_map = {(e["task_id"], e["date"]): e["done"] for e in entries}
-
-    _, days_in_month = calendar.monthrange(month["year"], month["month"])
-    dates = [date(month["year"], month["month"], d).isoformat() for d in range(1, days_in_month + 1)]
-
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(["Date"] + [h["name"] for h in habits] + ["Note"])
-    for d in dates:
-        row = [d]
-        for h in habits:
-            val = value_map.get((h["task_id"], d))
-            row.append("" if val is None else val)
-        row.append(note_map.get(d, ""))
-        writer.writerow(row)
-    return buf.getvalue()
-
-
-def get_month_overall_progress(month_id):
-    conn = get_db()
-    row = conn.execute(
-        "SELECT COUNT(*) AS total, SUM(done) AS done FROM daily_entries WHERE month_id = ?",
-        (month_id,),
-    ).fetchone()
-    conn.close()
-    total = row["total"] or 0
-    done = row["done"] or 0
-    pct = round(100 * done / total) if total else None
-    return {"done": done, "total": total, "pct": pct}
-
-
-def toggle_entry(entry_id):
-    conn = get_db()
-    row = conn.execute(
-        "SELECT done FROM daily_entries WHERE id = ?", (entry_id,)
-    ).fetchone()
-    if row is None:
-        conn.close()
-        return
-    new_val = 0 if row["done"] else 1
-    conn.execute("UPDATE daily_entries SET done = ? WHERE id = ?", (new_val, entry_id))
-    conn.commit()
-    conn.close()
-
-
-def get_month_report(month_id):
-    conn = get_db()
-    month = conn.execute("SELECT * FROM months WHERE id = ?", (month_id,)).fetchone()
-
-    overall = conn.execute(
-        "SELECT COUNT(*) AS total, SUM(done) AS done FROM daily_entries WHERE month_id = ?",
-        (month_id,),
-    ).fetchone()
-    total = overall["total"] or 0
-    done = overall["done"] or 0
-    overall_pct = round(100 * done / total) if total else 0
-
-    per_task_rows = conn.execute(
-        """SELECT t.id AS task_id, t.name,
-                  COUNT(*) AS scheduled,
-                  SUM(de.done) AS completed
-           FROM daily_entries de JOIN tasks t ON t.id = de.task_id
-           WHERE de.month_id = ?
-           GROUP BY t.id, t.name
-           ORDER BY t.name""",
-        (month_id,),
-    ).fetchall()
-
-    per_task = []
-    for r in per_task_rows:
-        scheduled = r["scheduled"] or 0
-        completed = r["completed"] or 0
-        pct = round(100 * completed / scheduled) if scheduled else 0
-
-        dated_rows = conn.execute(
-            """SELECT date, done FROM daily_entries
-               WHERE month_id = ? AND task_id = ? ORDER BY date""",
-            (month_id, r["task_id"]),
-        ).fetchall()
-        best_streak = 0
-        current_streak = 0
-        running = 0
-        for dr in dated_rows:
-            if dr["done"]:
-                running += 1
-                best_streak = max(best_streak, running)
-            else:
-                running = 0
-        # current streak = trailing run of done days up to the last entry
-        for dr in reversed(dated_rows):
-            if dr["done"]:
-                current_streak += 1
-            else:
-                break
-
-        per_task.append(
-            {
-                "name": r["name"],
-                "scheduled": scheduled,
-                "completed": completed,
-                "pct": pct,
-                "best_streak": best_streak,
-                "current_streak": current_streak,
-            }
-        )
-
-    daily_rows = conn.execute(
-        """SELECT date, COUNT(*) AS scheduled, SUM(done) AS completed
-           FROM daily_entries WHERE month_id = ? GROUP BY date""",
-        (month_id,),
-    ).fetchall()
-    daily_ratio = {
-        r["date"]: (r["completed"] or 0) / r["scheduled"] if r["scheduled"] else None
-        for r in daily_rows
-    }
-
-    conn.close()
-
-    _, days_in_month = calendar.monthrange(month["year"], month["month"])
-    weeks = _build_calendar_weeks(month["year"], month["month"], days_in_month, daily_ratio)
-
-    return {
-        "month": month,
-        "overall_pct": overall_pct,
-        "total": total,
-        "done": done,
-        "per_task": per_task,
-        "weeks": weeks,
-    }
-
-
-def _build_date_weeks(year, month, days_in_month):
-    """List of week-rows (Mon-Sun), each a list of 7 items: {day, date} or None for out-of-month cells."""
-    first_weekday = date(year, month, 1).weekday()
-    weeks = []
-    week = [None] * first_weekday
-    for day in range(1, days_in_month + 1):
-        d = date(year, month, day)
-        week.append({"day": day, "date": d.isoformat()})
-        if len(week) == 7:
-            weeks.append(week)
-            week = []
-    if week:
-        while len(week) < 7:
-            week.append(None)
-        weeks.append(week)
-    return weeks
-
-
-def _build_calendar_weeks(year, month, days_in_month, daily_ratio):
-    weeks = _build_date_weeks(year, month, days_in_month)
-    for week in weeks:
-        for cell in week:
-            if cell is not None:
-                cell["ratio"] = daily_ratio.get(cell["date"])
-    return weeks

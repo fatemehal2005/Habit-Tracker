@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Today — Study Tracker{% endblock %}
+{% block content %}
+<div id="today">
+  {% if running %}
+  <div class="running-banner">
+    <div>
+      <div class="running-label">Studying now</div>
+      <div class="running-name">{{ running.name }}</div>
+    </div>
+    <div class="running-time" data-elapsed="{{ running.seconds }}"></div>
+  </div>
+  {% endif %}
+
+  <div class="lesson-grid">
+  {% for l in lessons %}
+  {% set target = l.daily_target_hours * 3600 %}
+  {% set is_running = running and running.lesson_id == l.id %}
+  <section class="lesson-card{% if is_running %} is-running{% endif %}{% if l.seconds >= target %} is-done{% endif %}"
+           data-seconds="{{ l.seconds }}" data-target="{{ target }}"{% if l.ticking %} data-ticking{% endif %}>
+    <div class="lesson-head">
+      <span class="lesson-name">{{ l.name }}</span>
+      <span class="lesson-time"><span data-studied>{{ l.seconds|hm }}</span> / {{ target|hm }}</span>
+    </div>
+    <div class="lesson-row">
+    <div class="bar-track" aria-hidden="true">
+      <div class="bar-fill" data-fill style="width: {{ [100 * l.seconds / target, 100]|min }}%"></div>
+    </div>
+    {% if is_running %}
+    <form method="post" action="{{ url_for('study.stop_timer') }}">
+      <button class="big-btn stop-btn">Stop</button>
+    </form>
+    {% else %}
+    <form method="post" action="{{ url_for('study.start_timer', lesson_id=l.id) }}">
+      <button class="big-btn start-btn">Start</button>
+    </form>
+    {% endif %}
+    </div>
+  </section>
+  {% else %}
+  <p class="empty-note">No lessons yet. <a href="{{ url_for('study.lessons') }}">Add your lessons</a> to start tracking.</p>
+  {% endfor %}
+  </div>
+
+  {% if lessons %}
+  <h2>{{ month_name }}</h2>
+  {% set days_in_month = weeks|map('length')|sum %}
+  <div class="table-scroll check-scroll">
+  <table class="check-table">
+    <thead>
+      <tr>
+        <th class="lesson-col" rowspan="3">Lesson</th>
+        {% for week in weeks %}
+        <th class="week-head" colspan="{{ week|length }}">W<span class="wide-only">eek </span>{{ loop.index }}</th>
+        {% endfor %}
+        <th class="result-col" rowspan="3">Result</th>
+      </tr>
+      <tr>
+        {% for week in weeks %}{% for d in week %}
+        <th class="{{ 'week-start ' if loop.first }}{{ 'is-today' if d.isoformat() == today_str }}">{{ d.strftime('%a')[0] }}<span class="wide-only">{{ d.strftime('%a')[1] }}</span></th>
+        {% endfor %}{% endfor %}
+      </tr>
+      <tr>
+        {% for week in weeks %}{% for d in week %}
+        <th class="{{ 'week-start ' if loop.first }}{{ 'is-today' if d.isoformat() == today_str }}">{{ d.day }}</th>
+        {% endfor %}{% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for l in lessons %}
+      {% set row = namespace(done=0) %}
+      <tr>
+        <td class="lesson-col" title="{{ l.name }}">{{ l.name }}</td>
+        {% for week in weeks %}{% for d in week %}
+        {% set ds = d.isoformat() %}
+        {% if (l.id, ds) in checks %}{% set row.done = row.done + 1 %}{% endif %}
+        <td class="{{ 'week-start ' if loop.first }}{{ 'is-today' if ds == today_str }}">
+          <input type="checkbox" class="check-box" data-lesson-id="{{ l.id }}" data-date="{{ ds }}"
+                 aria-label="{{ l.name }}, {{ ds }}"{% if (l.id, ds) in checks %} checked{% endif %}>
+        </td>
+        {% endfor %}{% endfor %}
+        <td class="result-col">
+          <span data-result-days>{{ row.done }}</span>/{{ days_in_month }}
+          <div class="change"><span data-result-pct>{{ (100 * row.done / days_in_month)|round|int }}</span>%</div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+
+  <div class="bottom-grid">
+  <section>
+  <h2 id="report">Monthly report — {{ report_month_name }}</h2>
+  <form method="get" action="#report" class="inline-form report-bar">
+    <input type="month" name="month" value="{{ month_str }}" aria-label="Month" onchange="this.form.submit()">
+    <span class="total-line">Total: <strong>{{ '%.1f'|format(report.total) }} h</strong></span>
+  </form>
+
+  {% if report.lessons %}
+  <div class="chart-box"><canvas id="chart"></canvas></div>
+  <script type="application/json" id="chart-data">{{ chart|tojson }}</script>
+  {% else %}
+  <p class="empty-note">No lessons to show for this month.</p>
+  {% endif %}
+  </section>
+
+  <section id="sessions">
+  <h2>Forgotten sessions</h2>
+  {% if lessons %}
+  <form method="post" action="{{ url_for('study.add_session') }}" class="session-form">
+    <label class="field">Lesson
+      <select name="lesson_id" required>
+        {% for l in lessons %}
+        <option value="{{ l.id }}">{{ l.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field">Date <input type="date" name="date" value="{{ today_str }}" required></label>
+    <label class="field">From <input type="time" name="start" required></label>
+    <label class="field">To <input type="time" name="end" required></label>
+    <button class="btn">Add</button>
+  </form>
+  {% endif %}
+
+  <div class="session-list">
+  {% for s in sessions %}
+  <details class="row-card session-row">
+    <summary>
+      <span class="session-name">{{ s.name }}</span>
+      <span class="session-when">{{ s.start_at[:10] }} · {{ s.start_at[11:16] }}–{{ s.end_at[11:16] if s.end_at else 'running' }}</span>
+      <span class="session-length">{{ s.seconds|hm }}</span>
+    </summary>
+    {% if s.end_at %}
+    <form method="post" action="{{ url_for('study.update_session', session_id=s.id) }}" class="session-form">
+      <label class="field">Lesson
+        <select name="lesson_id" required>
+          {% for l in all_lessons %}
+          <option value="{{ l.id }}"{% if l.id == s.lesson_id %} selected{% endif %}>{{ l.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="field">Date <input type="date" name="date" value="{{ s.start_at[:10] }}" required></label>
+      <label class="field">From <input type="time" name="start" value="{{ s.start_at[11:16] }}" required></label>
+      <label class="field">To <input type="time" name="end" value="{{ s.end_at[11:16] }}" required></label>
+      <button class="btn">Save</button>
+    </form>
+    {% else %}
+    <p class="table-note">This session is still running. Stop it above to edit it.</p>
+    {% endif %}
+    <form method="post" action="{{ url_for('study.delete_session', session_id=s.id) }}" onsubmit="return confirm('Delete this session?')">
+      <button class="btn btn-quiet btn-danger">Delete</button>
+    </form>
+  </details>
+  {% else %}
+  <p class="empty-note">No sessions recorded yet.</p>
+  {% endfor %}
+  </div>
+  </section>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Compare Months — Study Tracker{% endblock %}
+{% block content %}
+<form method="get" class="inline-form">
+  <label class="field">Months to compare
+    <select name="n" onchange="this.form.submit()">
+      {% for i in range(2, 7) %}
+      <option value="{{ i }}"{% if i == n %} selected{% endif %}>Last {{ i }}</option>
+      {% endfor %}
+    </select>
+  </label>
+</form>
+
+{% if lessons %}
+<div class="chart-box"><canvas id="chart"></canvas></div>
+<script type="application/json" id="chart-data">{{ chart|tojson }}</script>
+
+<p class="table-note">Hours per month, with the change versus the month before.</p>
+<div class="table-scroll">
+<table>
+  <thead>
+    <tr><th>Lesson</th>{% for m in months %}<th>{{ m }}</th>{% endfor %}</tr>
+  </thead>
+  <tbody>
+    {% for l in lessons %}
+    <tr>
+      <td class="name-cell">{{ l.name }}</td>
+      {% for h in l.hours %}
+      {% set change = l.changes[loop.index0] %}
+      <td>
+        {{ '%.1f'|format(h) }} h
+        <div class="change">{% if change is none %}—{% else %}{{ '%+d'|format(change) }}%{% endif %}</div>
+      </td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty-note">No lessons to compare yet.</p>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}"></script>
+{% endblock %}

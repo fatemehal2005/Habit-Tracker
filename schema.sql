@@ -1,38 +1,21 @@
-CREATE TABLE IF NOT EXISTS months (
+CREATE TABLE IF NOT EXISTS lessons (
     id INTEGER PRIMARY KEY,
-    year INTEGER NOT NULL,
-    month INTEGER NOT NULL,
-    status TEXT NOT NULL DEFAULT 'draft',
-    locked_at TEXT,
-    UNIQUE(year, month)
+    name TEXT NOT NULL UNIQUE,
+    daily_target_hours REAL NOT NULL,
+    archived INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE IF NOT EXISTS tasks (
+CREATE TABLE IF NOT EXISTS sessions (
     id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE
+    lesson_id INTEGER NOT NULL REFERENCES lessons(id),
+    start_at TEXT NOT NULL,
+    end_at TEXT
 );
 
-CREATE TABLE IF NOT EXISTS month_tasks (
-    id INTEGER PRIMARY KEY,
-    month_id INTEGER NOT NULL REFERENCES months(id),
-    task_id INTEGER NOT NULL REFERENCES tasks(id),
-    weekday INTEGER NOT NULL,
-    UNIQUE(month_id, task_id, weekday)
-);
+CREATE INDEX IF NOT EXISTS idx_sessions_start ON sessions(start_at);
 
-CREATE TABLE IF NOT EXISTS daily_entries (
-    id INTEGER PRIMARY KEY,
-    month_id INTEGER NOT NULL REFERENCES months(id),
-    task_id INTEGER NOT NULL REFERENCES tasks(id),
+CREATE TABLE IF NOT EXISTS lesson_checks (
+    lesson_id INTEGER NOT NULL REFERENCES lessons(id),
     date TEXT NOT NULL,
-    done INTEGER NOT NULL DEFAULT 0,
-    UNIQUE(month_id, task_id, date)
-);
-
-CREATE TABLE IF NOT EXISTS day_notes (
-    id INTEGER PRIMARY KEY,
-    month_id INTEGER NOT NULL REFERENCES months(id),
-    date TEXT NOT NULL,
-    note TEXT NOT NULL DEFAULT '',
-    UNIQUE(month_id, date)
+    PRIMARY KEY (lesson_id, date)
 );
